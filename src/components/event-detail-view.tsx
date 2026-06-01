@@ -3,8 +3,12 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ArrowLeft, CalendarDays, MapPin, Check, Trash2, Users } from "lucide-react";
+import { ArrowLeft, CalendarDays, MapPin, Check, Trash2, Users, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 type Event = {
@@ -27,6 +31,7 @@ export function EventDetailView({ eventId }: { eventId: string }) {
   const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [profiles, setProfiles] = useState<Record<string, Profile>>({});
   const [loading, setLoading] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -124,9 +129,14 @@ export function EventDetailView({ eventId }: { eventId: string }) {
               <Check className="mr-1 h-4 w-4" /> {going ? "Anmäld" : "Anmäl mig"}
             </Button>
             {isMine && (
-              <Button onClick={deleteEvent} variant="ghost" size="sm" className="text-destructive hover:text-destructive">
-                <Trash2 className="mr-1 h-4 w-4" /> Ta bort
-              </Button>
+              <>
+                <Button onClick={() => setEditOpen(true)} variant="outline" size="sm">
+                  <Pencil className="mr-1 h-4 w-4" /> Redigera
+                </Button>
+                <Button onClick={deleteEvent} variant="ghost" size="sm" className="text-destructive hover:text-destructive">
+                  <Trash2 className="mr-1 h-4 w-4" /> Ta bort
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -173,6 +183,175 @@ export function EventDetailView({ eventId }: { eventId: string }) {
           </ul>
         )}
       </section>
+
+      {isMine && (
+        <EditEventDialog
+          event={event}
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          onSaved={(updated) => {
+            setEvent(updated);
+            setEditOpen(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function toDateInputValue(iso: string) {
+  const d = new Date(iso);
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60 * 1000);
+  return local.toISOString().slice(0, 10);
+}
+
+function toTimeInputValue(iso: string) {
+  return new Date(iso).toLocaleTimeString("sv-SE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function EditEventDialog({
+  event,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  event: Event;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: (event: Event) => void;
+}) {
+  const [title, setTitle] = useState(event.title);
+  const [location, setLocation] = useState(event.location ?? "");
+  const [description, setDescription] = useState(event.description ?? "");
+  const [startDate, setStartDate] = useState(() => toDateInputValue(event.start_at));
+  const [startTime, setStartTime] = useState(() => toTimeInputValue(event.start_at));
+  const [endDate, setEndDate] = useState(() => toDateInputValue(event.end_at ?? event.start_at));
+  const [endTime, setEndTime] = useState(() => toTimeInputValue(event.end_at ?? event.start_at));
+  const [multiDay, setMultiDay] = useState(Boolean(event.end_at));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setTitle(event.title);
+    setLocation(event.location ?? "");
+    setDescription(event.description ?? "");
+    setStartDate(toDateInputValue(event.start_at));
+    setStartTime(toTimeInputValue(event.start_at));
+    setEndDate(toDateInputValue(event.end_at ?? event.start_at));
+    setEndTime(toTimeInputValue(event.end_at ?? event.start_at));
+    setMultiDay(Boolean(event.end_at));
+  }, [event, open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (title.trim().length < 2) return toast.error("Ange en titel");
+
+    const start = new Date(`${startDate}T${startTime}:00`);
+    const end = multiDay ? new Date(`${endDate}T${endTime}:00`) : null;
+    if (end && end < start) return toast.error("Slutdatum måste vara efter startdatum");
+
+    setBusy(true);
+    const { data, error } = await supabase
+      .from("events")
+      .update({
+        title: title.trim(),
+        location: location.trim() || null,
+        description: description.trim() || null,
+        start_at: start.toISOString(),
+        end_at: end?.toISOString() ?? null,
+      })
+      .eq("id", event.id)
+      .select()
+      .single();
+
+    setBusy(false);
+    if (error) return toast.error(error.message);
+    toast.success("Event uppdaterat");
+    onSaved(data as Event);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Redigera event</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-title">Titel</Label>
+            <Input id="edit-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} required />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-date">Startdatum</Label>
+              <Input
+                id="edit-date"
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  if (!multiDay || endDate < e.target.value) setEndDate(e.target.value);
+                }}
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-time">Starttid</Label>
+              <Input id="edit-time" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} required />
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={multiDay}
+              onChange={(e) => {
+                setMultiDay(e.target.checked);
+                if (e.target.checked && endDate < startDate) setEndDate(startDate);
+              }}
+              className="h-4 w-4 accent-primary"
+            />
+            Flera dagar
+          </label>
+
+          {multiDay && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-end-date">Slutdatum</Label>
+                <Input id="edit-end-date" type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} required />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-end-time">Sluttid</Label>
+                <Input id="edit-end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} required />
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-location">Plats / Bana</Label>
+            <Input id="edit-location" value={location} onChange={(e) => setLocation(e.target.value)} maxLength={200} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-description">Beskrivning</Label>
+            <Textarea id="edit-description" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={1000} rows={3} />
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+              Avbryt
+            </Button>
+            <Button type="submit" disabled={busy}>
+              {busy ? "Sparar..." : "Spara ändringar"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
