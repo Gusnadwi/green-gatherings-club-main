@@ -1,6 +1,16 @@
 import { supabase } from "@/integrations/supabase/client";
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+const PUSH_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(promise: Promise<T>, message: string) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error(message)), PUSH_TIMEOUT_MS);
+    }),
+  ]);
+}
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -48,7 +58,10 @@ export function supportsPushNotifications() {
 
 export async function getPushSubscription() {
   if (!supportsPushNotifications()) return null;
-  const registration = await navigator.serviceWorker.ready;
+  const registration = await withTimeout(
+    navigator.serviceWorker.ready,
+    "Service worker blev inte redo. Stäng appen och öppna den från hemskärmen igen.",
+  );
   return registration.pushManager.getSubscription();
 }
 
@@ -57,24 +70,39 @@ export async function enablePushNotifications() {
     throw new Error("Notiser stöds inte här ännu. Öppna appen från hemskärmen på iPhone.");
   }
 
-  const permission = await Notification.requestPermission();
+  const permission = await withTimeout(
+    Notification.requestPermission(),
+    "iPhone svarade inte på notisfrågan. Kontrollera att appen är öppnad från hemskärmen.",
+  );
   if (permission !== "granted") {
     throw new Error("Notiser är inte tillåtna");
   }
 
-  const registration = await navigator.serviceWorker.ready;
-  const existing = await registration.pushManager.getSubscription();
+  const registration = await withTimeout(
+    navigator.serviceWorker.ready,
+    "Service worker blev inte redo. Stäng appen och öppna den från hemskärmen igen.",
+  );
+  const existing = await withTimeout(
+    registration.pushManager.getSubscription(),
+    "Kunde inte läsa notisstatus.",
+  );
   const subscription =
     existing ??
-    (await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-    }));
+    (await withTimeout(
+      registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      }),
+      "Kunde inte aktivera notiser. Kontrollera iPhone-inställningar för appen.",
+    ));
 
-  await authorizedFetch("/api/push-subscriptions", {
-    method: "POST",
-    body: JSON.stringify({ subscription }),
-  });
+  await withTimeout(
+    authorizedFetch("/api/push-subscriptions", {
+      method: "POST",
+      body: JSON.stringify({ subscription }),
+    }),
+    "Kunde inte spara notisinställningen.",
+  );
 
   return subscription;
 }
