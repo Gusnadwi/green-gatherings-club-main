@@ -6,7 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { LogOut } from "lucide-react";
+import { Camera, LogOut, Upload } from "lucide-react";
+
+const AVATAR_BUCKET = "avatars";
+const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
+const ALLOWED_AVATAR_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 export function ProfileView() {
   const { user } = useAuth();
@@ -14,6 +18,7 @@ export function ProfileView() {
   const [avatarUrl, setAvatarUrl] = useState("");
   const [handicap, setHandicap] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -52,6 +57,68 @@ export function ProfileView() {
     toast.success("Profil sparad");
   }
 
+  async function uploadAvatar(file: File) {
+    if (!user) return;
+    if (!ALLOWED_AVATAR_TYPES.includes(file.type)) {
+      toast.error("Välj en bild i JPG, PNG eller WebP");
+      return;
+    }
+    if (file.size > MAX_AVATAR_SIZE) {
+      toast.error("Bilden får vara max 5 MB");
+      return;
+    }
+
+    setUploadingAvatar(true);
+    const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const path = `${user.id}/avatar-${Date.now()}.${extension}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(AVATAR_BUCKET)
+      .upload(path, file, {
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      setUploadingAvatar(false);
+      toast.error(uploadError.message);
+      return;
+    }
+
+    const { data } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(path);
+    const publicUrl = data.publicUrl;
+
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({
+        avatar_url: publicUrl,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", user.id);
+
+    setUploadingAvatar(false);
+    if (profileError) return toast.error(profileError.message);
+    setAvatarUrl(publicUrl);
+    toast.success("Profilbild uppladdad");
+  }
+
+  async function removeAvatar() {
+    if (!user) return;
+    setUploadingAvatar(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        avatar_url: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", user.id);
+
+    setUploadingAvatar(false);
+    if (error) return toast.error(error.message);
+    setAvatarUrl("");
+    toast.success("Profilbild borttagen");
+  }
+
   if (loading) return <p className="text-muted-foreground">Laddar…</p>;
 
   return (
@@ -66,8 +133,44 @@ export function ProfileView() {
               <AvatarFallback className="text-xl">{(displayName || "?").slice(0,2).toUpperCase()}</AvatarFallback>
             </Avatar>
             <div className="flex-1 space-y-1.5">
-              <Label htmlFor="pf-avatar">Avatar URL</Label>
-              <Input id="pf-avatar" value={avatarUrl} onChange={(e) => setAvatarUrl(e.target.value)} placeholder="https://..." />
+              <Label htmlFor="pf-avatar">Profilbild</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  id="pf-avatar"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadAvatar(file);
+                    e.target.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => document.getElementById("pf-avatar")?.click()}
+                  disabled={uploadingAvatar}
+                >
+                  {uploadingAvatar ? (
+                    <Upload className="mr-1 h-4 w-4 animate-pulse" />
+                  ) : (
+                    <Camera className="mr-1 h-4 w-4" />
+                  )}
+                  {uploadingAvatar ? "Laddar upp..." : "Ladda upp foto"}
+                </Button>
+                {avatarUrl && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => void removeAvatar()}
+                    disabled={uploadingAvatar}
+                  >
+                    Ta bort
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">JPG, PNG eller WebP. Max 5 MB.</p>
             </div>
           </div>
 
