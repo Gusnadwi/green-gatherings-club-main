@@ -6,7 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { Camera, LogOut, Upload } from "lucide-react";
+import { Bell, BellOff, Camera, LogOut, Upload } from "lucide-react";
+import {
+  disablePushNotifications,
+  enablePushNotifications,
+  getPushSubscription,
+  supportsPushNotifications,
+} from "@/lib/push-notifications";
 
 const AVATAR_BUCKET = "avatars";
 const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
@@ -19,6 +25,8 @@ export function ProfileView() {
   const [handicap, setHandicap] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -32,6 +40,10 @@ export function ProfileView() {
       setLoading(false);
     });
   }, [user]);
+
+  useEffect(() => {
+    getPushSubscription().then((subscription) => setPushEnabled(Boolean(subscription)));
+  }, []);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -119,6 +131,25 @@ export function ProfileView() {
     toast.success("Profilbild borttagen");
   }
 
+  async function togglePushNotifications() {
+    setPushBusy(true);
+    try {
+      if (pushEnabled) {
+        await disablePushNotifications();
+        setPushEnabled(false);
+        toast.success("Notiser avstängda");
+      } else {
+        await enablePushNotifications();
+        setPushEnabled(true);
+        toast.success("Notiser aktiverade");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Kunde inte ändra notiser");
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
   if (loading) return <p className="text-muted-foreground">Laddar…</p>;
 
   return (
@@ -182,6 +213,35 @@ export function ProfileView() {
           <div className="space-y-1.5">
             <Label htmlFor="pf-hcp">Handicap</Label>
             <Input id="pf-hcp" type="number" step="0.1" value={handicap} onChange={(e) => setHandicap(e.target.value)} placeholder="t.ex. 18.4" />
+          </div>
+
+          <div className="rounded-lg border border-border/70 bg-background/40 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <Label>iPhone-notiser</Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Få notiser när någon skriver i chatten.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant={pushEnabled ? "default" : "outline"}
+                onClick={() => void togglePushNotifications()}
+                disabled={pushBusy || !supportsPushNotifications()}
+              >
+                {pushEnabled ? (
+                  <BellOff className="mr-1 h-4 w-4" />
+                ) : (
+                  <Bell className="mr-1 h-4 w-4" />
+                )}
+                {pushBusy ? "Uppdaterar..." : pushEnabled ? "Stäng av" : "Aktivera"}
+              </Button>
+            </div>
+            {!supportsPushNotifications() && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Notiser kräver att appen öppnas från hemskärmen och att VAPID-nycklar finns i Vercel.
+              </p>
+            )}
           </div>
 
           <div className="flex items-center justify-between pt-2">

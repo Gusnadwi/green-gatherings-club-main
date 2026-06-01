@@ -15,6 +15,13 @@ type ApiUser = {
   email?: string;
 };
 
+type PushSubscriptionRow = {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  subscription: unknown;
+};
+
 async function getServerEntry(): Promise<ServerEntry> {
   if (!serverEntryPromise) {
     serverEntryPromise = import("@tanstack/react-start/server-entry").then(
@@ -75,6 +82,37 @@ async function readJson(request: Request) {
   } catch {
     return null;
   }
+}
+
+function getServerEnv() {
+  return typeof process !== "undefined" ? process.env : {};
+}
+
+function getOrigin(request: Request) {
+  const url = new URL(request.url);
+  return `${url.protocol}//${url.host}`;
+}
+
+async function sendWebPush(subscription: unknown, payload: unknown) {
+  const env = getServerEnv();
+  const publicKey = env.VAPID_PUBLIC_KEY ?? env.VITE_VAPID_PUBLIC_KEY;
+  const privateKey = env.VAPID_PRIVATE_KEY;
+  const contactEmail = env.VAPID_CONTACT_EMAIL ?? "admin@example.com";
+
+  if (!publicKey || !privateKey) {
+    return { ok: false, disabled: true };
+  }
+
+  const webPushModule = (await import("web-push")) as typeof import("web-push") & {
+    default?: typeof import("web-push");
+  };
+  const webPush = webPushModule.default ?? webPushModule;
+  webPush.setVapidDetails(`mailto:${contactEmail}`, publicKey, privateKey);
+  await webPush.sendNotification(
+    subscription as Parameters<typeof webPush.sendNotification>[0],
+    JSON.stringify(payload),
+  );
+  return { ok: true };
 }
 
 async function handleApi(request: Request): Promise<Response | null> {
@@ -175,6 +213,113 @@ async function handleApi(request: Request): Promise<Response | null> {
       .single();
     if (error) return json({ error: error.message }, { status: 500 });
     return json({ message: data }, { status: 201 });
+  }
+
+  if (url.pathname === "/api/push-subscriptions" && request.method === "POST") {
+    const body = await readJson(request);
+    const subscription = body?.subscription;
+    const endpoint = subscription?.endpoint;
+    if (!subscription || typeof endpoint !== "string") {
+      return json({ error: "subscription is required" }, { status: 400 });
+    }
+
+    const { error } = await (supabaseAdmin as any)
+      .from("push_subscriptions")
+      .upsert(
+        {
+          user_id: user.id,
+          endpoint,
+          subscription,
+          user_agent: request.headers.get("user-agent"),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "endpoint" },
+      );
+
+    if (error) return json({ error: error.message }, { status: 500 });
+    return json({ ok: true });
+  }
+
+  if (url.pathname === "/api/push-subscriptions" && request.method === "DELETE") {
+    const body = await readJson(request);
+    const endpoint = body?.endpoint;
+    if (typeof endpoint !== "string") {
+      return json({ error: "endpoint is required" }, { status: 400 });
+    }
+
+    const { error } = await (supabaseAdmin as any)
+      .from("push_subscriptions")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("endpoint", endpoint);
+
+    if (error) return json({ error: error.message }, { status: 500 });
+    return json({ ok: true });
+  }
+
+  if (url.pathname === "/api/notifications/message" && request.method === "POST") {
+    const body = await readJson(request);
+    const messageId = body?.messageId;
+    if (typeof messageId !== "string") {
+      return json({ error: "messageId is required" }, { status: 400 });
+    }
+
+    const { data: message, error: messageError } = await supabaseAdmin
+      .from("messages")
+      .select("id, user_id, content")
+      .eq("id", messageId)
+      .maybeSingle();
+    if (messageError) return json({ error: messageError.message }, { status: 500 });
+    if (!message) return json({ error: "Message not found" }, { status: 404 });
+    if (message.user_id !== user.id) return json({ error: "Forbidden" }, { status: 403 });
+
+    const [{ data: profile }, { data: subscriptions, error: subscriptionError }] = await Promise.all([
+      supabaseAdmin.from("profiles").select("display_name").eq("id", user.id).maybeSingle(),
+      (supabaseAdmin as any)
+        .from("push_subscriptions")
+        .select("id, user_id, endpoint, subscription")
+        .neq("user_id", user.id),
+    ]);
+    if (subscriptionError) return json({ error: subscriptionError.message }, { status: 500 });
+
+    const rows = (subscriptions ?? []) as PushSubscriptionRow[];
+    const payload = {
+      title: profile?.display_name ? `${profile.display_name} skrev i chatten` : "Nytt chattmeddelande",
+      body: String(message.content).slice(0, 120),
+      url: `${getOrigin(request)}/chat`,
+    };
+
+    let sent = 0;
+    let disabled = false;
+    const staleEndpoints: string[] = [];
+
+    await Promise.all(
+      rows.map(async (row) => {
+        try {
+          const result = await sendWebPush(row.subscription, payload);
+          if (result.disabled) disabled = true;
+          if (result.ok) sent += 1;
+        } catch (error) {
+          const statusCode = typeof error === "object" && error && "statusCode" in error
+            ? Number((error as { statusCode?: number }).statusCode)
+            : 0;
+          if (statusCode === 404 || statusCode === 410) {
+            staleEndpoints.push(row.endpoint);
+            return;
+          }
+          console.error("Push notification failed", error);
+        }
+      }),
+    );
+
+    if (staleEndpoints.length > 0) {
+      await (supabaseAdmin as any)
+        .from("push_subscriptions")
+        .delete()
+        .in("endpoint", staleEndpoints);
+    }
+
+    return json({ ok: true, sent, disabled });
   }
 
   return json({ error: "Not found" }, { status: 404 });

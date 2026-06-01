@@ -1,4 +1,4 @@
-const CACHE_NAME = "forbundet-inv-v1";
+const CACHE_NAME = "forbundet-inv-v2";
 const APP_SHELL = ["/", "/home", "/manifest.webmanifest", "/icon.svg", "/apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {
@@ -28,5 +28,37 @@ self.addEventListener("fetch", (event) => {
         return response;
       })
       .catch(() => caches.match(request).then((cached) => cached || caches.match("/"))),
+  );
+});
+
+self.addEventListener("push", (event) => {
+  const data = event.data?.json() ?? {};
+  const title = data.title || "Förbundet Inv.";
+  const options = {
+    body: data.body || "Ny aktivitet i appen",
+    icon: "/apple-touch-icon.png",
+    badge: "/apple-touch-icon.png",
+    data: {
+      url: data.url || "/chat",
+    },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = new URL(event.notification.data?.url || "/chat", self.location.origin).href;
+
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ("focus" in client && client.url.startsWith(self.location.origin)) {
+          client.navigate(targetUrl);
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(targetUrl);
+    }),
   );
 });

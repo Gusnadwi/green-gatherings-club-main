@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Heart, Plus, Send, Trash2, BarChart3, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { notifyNewMessage } from "@/lib/push-notifications";
 
 type Profile = { id: string; display_name: string; avatar_url: string | null; handicap: number | null };
 type Message = { id: string; user_id: string; content: string; created_at: string };
@@ -95,8 +96,15 @@ export function ChatView() {
     const content = text.trim();
     if (!content || !user) return;
     setText("");
-    const { error } = await supabase.from("messages").insert({ user_id: user.id, content });
+    const { data, error } = await supabase
+      .from("messages")
+      .insert({ user_id: user.id, content })
+      .select("id")
+      .single();
     if (error) toast.error(error.message);
+    if (data?.id) {
+      notifyNewMessage(data.id).catch((err) => console.warn("Push notification failed", err));
+    }
   }
 
   async function toggleLike(messageId: string) {
