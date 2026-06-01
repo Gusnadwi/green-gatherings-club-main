@@ -49,7 +49,7 @@ function Index() {
             <Trophy className="h-7 w-7" />
           </div>
           <h1 className="font-display text-3xl tracking-wide">FÖRBUNDET INV.</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Golfsällskapets klubbhus</p>
+          <p className="mt-1 text-sm text-muted-foreground">Krutte Förbundets egna hemsida</p>
         </div>
 
         <Card>
