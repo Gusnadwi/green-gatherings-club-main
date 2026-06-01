@@ -1,0 +1,2 @@
+-- Keep invite_codes for controlled account creation. This migration previously
+-- dropped the table, which broke the signup data model for new environments.
