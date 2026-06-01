@@ -1,3 +1,21 @@
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+dist-ssr
+.output
+.vinxi
+.tanstack/**
+.nitro
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.local
+.dev.vars
+
 # Logs
 logs
 *.log
@@ -7,18 +25,16 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-.output
-.vinxi
-.tanstack/**
-.nitro
-*.local
+# Supabase local state
+supabase/.branches
+supabase/.temp
+supabase/.env
 
 # Wrangler / Cloudflare
 .wrangler/
-.dev.vars
+
+# Vercel
+.vercel
 
 # Editor directories and files
 .vscode/*
